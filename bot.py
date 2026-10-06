@@ -20,6 +20,7 @@ class ModeState(StatesGroup):
 
 
 def invert_image(image_bytes: bytes) -> bytes:
+    """Инвертирует цвета изображения."""
     with Image.open(io.BytesIO(image_bytes)) as img:
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -29,7 +30,8 @@ def invert_image(image_bytes: bytes) -> bytes:
         return output_buffer.getvalue()
 
 
-def add_grid(image_bytes: bytes, rows: int = 30, cols: int = 30) -> bytes:
+def add_grid(image_bytes: bytes, rows: int = 30, cols: int = 30, line_width: int = 3) -> bytes:
+    """Накладывает черную сетку 30x30 с утолщенными линиями (line_width=3)."""
     with Image.open(io.BytesIO(image_bytes)) as img:
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -39,13 +41,15 @@ def add_grid(image_bytes: bytes, rows: int = 30, cols: int = 30) -> bytes:
         step_x = width / cols
         step_y = height / rows
         
+        # Вертикальные линии
         for i in range(1, cols):
             x = int(i * step_x)
-            draw.line([(x, 0), (x, height)], fill="black", width=1)
+            draw.line([(x, 0), (x, height)], fill="black", width=line_width)
             
+        # Горизонтальные линии
         for j in range(1, rows):
             y = int(j * step_y)
-            draw.line([(0, y), (width, y)], fill="black", width=1)
+            draw.line([(0, y), (width, y)], fill="black", width=line_width)
             
         output_buffer = io.BytesIO()
         img.save(output_buffer, format="JPEG")
@@ -53,6 +57,7 @@ def add_grid(image_bytes: bytes, rows: int = 30, cols: int = 30) -> bytes:
 
 
 async def set_main_menu(bot: Bot):
+    """Установка синей кнопки 'Меню' слева от поля ввода."""
     main_menu_commands = [
         BotCommand(command="inversion", description="Инвертировать цвета картинки"),
         BotCommand(command="setka", description="Наложить сетку 30x30"),
@@ -114,7 +119,8 @@ async def process_photo(message: Message, state: FSMContext):
         result_bytes = invert_image(raw_data)
         file_name = "inverted.jpg"
     else:
-        result_bytes = add_grid(raw_data, rows=30, cols=30)
+        # line_width=3 делает линии хорошо видимыми и толстыми
+        result_bytes = add_grid(raw_data, rows=30, cols=30, line_width=3)
         file_name = "grid_30x30.jpg"
 
     input_file = BufferedInputFile(result_bytes, filename=file_name)
@@ -122,7 +128,7 @@ async def process_photo(message: Message, state: FSMContext):
     await state.clear()
 
 
-# Мини-веб-сервер для проверки работоспособности на Render
+# Мини веб-сервер для Keep-Alive на Render
 async def handle_ping(request):
     return web.Response(text="Bot is running!")
 
@@ -139,7 +145,6 @@ async def start_web_server():
 
 async def main():
     await set_main_menu(bot)
-    # Запускаем веб-сервер и бота параллельно
     await asyncio.gather(
         start_web_server(),
         dp.start_polling(bot)

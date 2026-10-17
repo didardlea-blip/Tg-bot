@@ -30,7 +30,7 @@ def invert_image(image_bytes: bytes) -> bytes:
         return output_buffer.getvalue()
 
 
-def add_grid(image_bytes: bytes, rows: int = 30, cols: int = 30, line_width: int = 3) -> bytes:
+def add_grid(image_bytes: bytes, rows: int = 30, cols: int = 30, line_width: int = 9) -> bytes:
     """Накладывает черную сетку 30x30 с утолщенными линиями (line_width=3)."""
     with Image.open(io.BytesIO(image_bytes)) as img:
         if img.mode != "RGB":

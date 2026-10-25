@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from PIL import Image, ImageOps
 import cv2
+from moviepy.editor import VideoFileClip, AudioFileClip
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -25,7 +26,6 @@ class ModeState(StatesGroup):
 
 
 def invert_image(image_bytes: bytes) -> bytes:
-    """Инвертирует цвета изображения."""
     with Image.open(io.BytesIO(image_bytes)) as img:
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -36,27 +36,41 @@ def invert_image(image_bytes: bytes) -> bytes:
 
 
 def add_grid_image_to_photo(image_bytes: bytes) -> bytes:
-    """Накладывает вашу сетку поверх отправленного фото."""
+    """Накладывает сетку на фото, убирая белый фон (делая его прозрачным)."""
     with Image.open(io.BytesIO(image_bytes)) as img:
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        
+        img = img.convert("RGBA")
         width, height = img.size
         
         if os.path.exists(GRID_FILENAME):
             with Image.open(GRID_FILENAME) as grid_img:
-                if grid_img.mode != "RGB":
-                    grid_img = grid_img.convert("RGB")
+                grid_img = grid_img.convert("RGBA")
                 grid_resized = grid_img.resize((width, height))
-                img.paste(grid_resized, (0, 0))
+                
+                # Убираем белый цвет (делаем белые пиксели прозрачными)
+                datas = grid_resized.getdata()
+                new_data = []
+                for item in datas:
+                    # Если пиксель белый (или близкий к нему), делаем его полностью прозрачным (альфа = 0)
+                    if item[0] > 200 and item[1] > 200 and item[2] > 200:
+                        new_data.append((255, 255, 255, 0))
+                    else:
+                        new_data.append(item)
+                grid_resized.putdata(new_data)
+                
+                # Накладываем сетку поверх фото с сохранением прозрачности
+                img.alpha_composite(grid_resized)
         
+        # Переводим обратно в RGB для JPEG
+        rgb_img = img.convert("RGB")
         output_buffer = io.BytesIO()
-        img.save(output_buffer, format="JPEG")
+        rgb_img.save(output_buffer, format="JPEG")
         return output_buffer.getvalue()
 
 
 def add_grid_to_video(input_video_path: str, output_video_path: str):
-    """Накладывает вашу сетку на каждый кадр видео."""
+    """Накладывает сетку на каждый кадр видео без белого фона и с сохранением звука."""
+    temp_silent_path = input_video_path + "_silent.mp4"
+    
     cap = cv2.VideoCapture(input_video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps == 0 or fps != fps:
@@ -66,26 +80,74 @@ def add_grid_to_video(input_video_path: str, output_video_path: str):
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(temp_silent_path, fourcc, fps, (width, height))
     
-    grid_frame = None
+    # Загружаем сетку через PIL для обработки белого фона
+    grid_rgba = None
     if os.path.exists(GRID_FILENAME):
-        grid_frame = cv2.imread(GRID_FILENAME)
-        if grid_frame is not None:
-            grid_frame = cv2.resize(grid_frame, (width, height))
+        with Image.open(GRID_FILENAME) as g_img:
+            g_img = g_img.convert("RGBA").resize((width, height))
+            grid_rgba = g_img
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
             
-        if grid_frame is not None:
-            frame = grid_frame
+        if grid_rgba is not None:
+            # Конвертируем кадр OpenCV (BGR) в PIL (RGBA)
+            cv2_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_frame = Image.fromarray(cv2_rgb).convert("RGBA")
+            
+            # Создаем копию сетки для кадра и убираем белый фон
+            grid_copy = grid_rgba.copy()
+            datas = grid_copy.getdata()
+            new_data = []
+            for item in datas:
+                if item[0] > 200 and item[1] > 200 and item[2] > 200:
+                    new_data.append((255, 255, 255, 0))
+                else:
+                    new_data.append(item)
+            grid_copy.putdata(new_data)
+            
+            # Накладываем сетку
+            pil_frame.alpha_composite(grid_copy)
+            
+            # Возвращаем обратно в формат OpenCV
+            processed_rgb = pil_frame.convert("RGB")
+            frame = cv2.cvtColor(array_from_pil(processed_rgb), cv2.COLOR_RGB2BGR)
             
         out.write(frame)
         
     cap.release()
     out.release()
+
+    # Восстанавливаем звук с помощью MoviePy
+    try:
+        video_clip = VideoFileClip(temp_silent_path)
+        original_clip = VideoFileClip(input_video_path)
+        
+        if original_clip.audio is not None:
+            final_clip = video_clip.set_audio(original_clip.audio)
+            final_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac", logger=None)
+            final_clip.close()
+        else:
+            video_clip.write_videofile(output_video_path, codec="libx264", logger=None)
+            
+        video_clip.close()
+        original_clip.close()
+    except Exception:
+        # Если вдруг MoviePy не сработает, отдаем видео без звука, чтобы не было ошибки
+        if os.path.exists(temp_silent_path):
+            os.replace(temp_silent_path, output_video_path)
+
+    if os.path.exists(temp_silent_path):
+        os.remove(temp_silent_path)
+
+
+def array_from_pil(pil_img):
+    import numpy as np
+    return np.array(pil_img)
 
 
 async def set_main_menu(bot: Bot):
@@ -169,7 +231,7 @@ async def process_video(message: Message, state: FSMContext):
         await message.answer("Для видео поддерживается только команда `/setka`.", parse_mode="Markdown")
         return
 
-    await message.answer("⏳ Обрабатываю видео с вашей сеткой, подождите...")
+    await message.answer("⏳ Обрабатываю видео и звук, подождите...")
 
     video_file = await bot.get_file(message.video.file_id)
     

@@ -2,4 +2,4 @@ aiogram
 pillow
 aiohttp
 opencv-python-headless
-moviepy
+numpy
